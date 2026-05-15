@@ -8,7 +8,6 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # --- CONFIGURATION ---
-# REPLACE WITH YOUR NEW API KEY (The old one is compromised!)
 API_KEY = "YOUR_API_KEY"
 
 MODEL_ID = "gemini-3.1-flash-lite" # Or any model you want
