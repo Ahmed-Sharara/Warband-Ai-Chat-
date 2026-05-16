@@ -8,10 +8,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # --- CONFIGURATION ---
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# gemini-1.5-flash is currently the fastest for low-latency dialogue
-MODEL_ID = "gemini-1.5-flash" 
+OPENROUTER_API_KEY = "YOUR-API-KEY"
+MODEL_ID = "openai/gpt-oss-120b:free" 
 
 WATCH_DIR = r"C:\Users\LOQ\Documents\Mount&Blade Warband WSE2\WSE\Native"
 INPUT_FILE = os.path.abspath(os.path.join(WATCH_DIR, "To AI Chat.json"))
@@ -23,47 +21,52 @@ last_msg_hash = ""
 last_processed_time = 0
 COOLDOWN = 0.5 # Minimum seconds between API calls
 
-def get_gemini_response(text, name, kingdom):
-    """Sends the request to Gemini using a persistent session."""
-    if not GEMINI_API_KEY:
-        print("!!! ERROR: GEMINI_API_KEY not found in environment variables.")
+def get_openrouter_response(text, name, kingdom, role):
+    """Sends the request to OpenRouter using a persistent session."""
+    if not OPENROUTER_API_KEY:
+        print("!!! ERROR: OPENROUTER_API_KEY is missing.")
         return "I have no voice... (API Key Missing)"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_ID}:generateContent?key={GEMINI_API_KEY}"
+    url = "https://openrouter.ai/api/v1/chat/completions"
     
-    prompt = (
-        f"Roleplay as {name}, a character of the {kingdom} in the world of Calradia. "
-        f"The player says: '{text}'. "
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # Context-aware instructions based on role
+    village_context = " You are an elder responsible for your people's safety." if "elder" in name.lower() or "elder" in role.lower() else ""
+    
+    system_prompt = (
+        f"Roleplay as {name}, a {role} of the {kingdom} in the world of Calradia.{village_context} "
         "Respond strictly in character with a gritty medieval tone. "
         "Your response MUST be ONLY the spoken dialogue. Max 15 words. "
-        "IMPORTANT: If the player threatens to kill you, attack you, or burn your property/village, you MUST append the exact text [ACTION_HOSTILE] to the end of your response."
+        "IMPORTANT: If the player explicitly threatens to KILL you, ATTACK your village, or BURN property, "
+        "and you are in a position where this would provoke a fight, "
+        "append the exact text [ACTION_HOSTILE] to the end of your response."
     )
     
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.6,
-            "maxOutputTokens": 45
-        },
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
+        "model": MODEL_ID,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"The player says: '{text}'"}
+        ],
+        "temperature": 0.6,
+        "max_tokens": 45
     }
     
     try:
-        # Using session.post instead of requests.post saves ~200-400ms per call
-        r = session.post(url, json=payload, timeout=12)
+        r = session.post(url, headers=headers, json=payload, timeout=12)
         
         if r.status_code == 200:
             result = r.json()
             try:
-                text_response = result['candidates'][0]['content']['parts'][0]['text']
+                # OpenRouter format extraction
+                text_response = result['choices'][0]['message']['content']
                 return text_response
             except KeyError:
-                print("!!! API Safety/Format Error. Raw response:", result)
+                print("!!! API Format Error. Raw response:", result)
                 return "The winds carry foul words. I will not answer."
         elif r.status_code == 429:
             print("!!! RATE LIMIT REACHED: Slow down the conversation.")
@@ -114,30 +117,49 @@ class AIBridgeHandler(FileSystemEventHandler):
             last_msg_hash = current_hash
             last_processed_time = current_time
 
-            print(f"\n[EVENT] Processing message from {data.get('name')}: {msg}")
+            print(f"\n[EVENT] Processing message from {data.get('name')} ({data.get('role', 'NPC')}): {msg}")
 
             # 5. Clear Input Immediately (Prevent ghost loops)
             with open(INPUT_FILE, "w", encoding="utf-8") as f:
                 json.dump({}, f)
 
-            # 6. Get AI Response
-            response_text = get_gemini_response(msg, data.get("name", "Lord"), data.get("kingdom", "Calradia"))
+            # 6. Get AI Response via OpenRouter
+            role = data.get("role", "commoner").lower()
+            response_text = get_openrouter_response(msg, data.get("name", "Lord"), data.get("kingdom", "Calradia"), role)
             
             # 7. Format for Warband (Remove JSON-breaking characters)
             clean_response = response_text.replace("\n", " ").replace('"', "'").strip()
 
             out_data = {"response": clean_response}
+
+            # --- ROLE-BASED ACTION OVERRIDE (CRITICAL SECURITY) ---
+            # We only allow direct combat jumps for Village Elders to prevent bugs with Kings/Lords
+            is_threat = any(word in msg.lower() for word in ["burn", "killing", "raid", "destroy", "attack", "to arms"])
+            is_elder = "elder" in data.get("name", "").lower() or "elder" in role
+            
             if "[ACTION_HOSTILE]" in clean_response:
+                # 1. Always remove the technical tag from the spoken dialogue
                 clean_response = clean_response.replace("[ACTION_HOSTILE]", "").strip()
                 out_data["response"] = clean_response
-                out_data["action"] = "hostile"
+
+                # 2. Hard Enforcement: ONLY Village Elders responding to a threat can trigger 'hostile'
+                if is_elder and is_threat:
+                    out_data["action"] = "hostile"
+                    print(f"[DEBUG] HOSTILE action approved for Village Elder.")
+                else:
+                    # If it's a King, Lord, or anyone NOT an elder, we FORCE it to be peaceful 
+                    # even if the player was rude, to avoid breaking game balance/logic.
+                    print(f"[DEBUG] REJECTED HOSTILE action. NPC is not an Elder or input wasn't a threat. Role: {role}")
+            
+            # Additional safety: If user didn't mention burning/killing, strip the hostile action anyway
+            elif not is_threat and out_data.get("action") == "hostile":
+                del out_data["action"]
 
             # 8. Write to Game
             with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                 json.dump(out_data, f, ensure_ascii=False)
             
             print(f"[SUCCESS] AI Answered: {clean_response}")
-
 
         except Exception as e:
             print(f"!!! processing Error: {e}")
