@@ -4,7 +4,7 @@ This project connects Mount & Blade: Warband to AI language models. Instead of r
 
 This isn't just text, either. The mod hooks into the game's actual mechanics. For example, if you threaten to burn a village or kill the inhabitants while talking to a Village Elder, the AI detects the threat, the script validates the NPC's role, and the game throws you straight into the battle/raid menu. 
 
-I've provided two different Python scripts to run the bridge. You can either run the AI locally on your own PC or use a cloud API for heavier models.
+I've provided three different Python scripts to run the bridge. You can run the AI locally on your own PC, use a cloud API for heavier models, or connect through Player2 for a free, account-based option.
 
 ## How the bridge works
 
@@ -25,7 +25,11 @@ pip install requests watchdog
 
 ## Running the AI
 
-You have two options depending on your setup. Make sure the `WATCH_DIR` variable in either script is updated to match your exact Warband installation path.
+You have three options depending on your setup. Make sure the `WATCH_DIR` variable in your chosen script points to the folder where you installed the mod files. For example:
+
+```
+C:\Users\YourName\Documents\Mount&Blade Warband WSE2\WSE\Native
+```
 
 ### Option 1: Local Bridge (ai_bridge_local.py)
 Use this if you want to run a model locally on your own hardware using LM Studio. It's fully offline and great if you have the RAM for it.
@@ -41,10 +45,27 @@ Use this if you want to connect to a cloud provider like OpenRouter to access ma
 3. Run `python ai_bridge_cloud.py` in your terminal.
 4. Launch Warband.
 
+### Option 3: Player2 Bridge (ai_bridge_player2.py)
+Use this to connect through [Player2](https://player2.game), a free gaming AI platform. No need to manage API keys or run anything locally.
+
+Open `ai_bridge_player2.py` and set your mode at the top of the file:
+
+```python
+MODE = "app"  # "app" or "apikey"
+```
+
+**App mode** requires the Player2 desktop app running on your PC. It handles authentication automatically with no extra steps.
+
+**API key mode** uses a Player2 API key. If you leave `PLAYER2_API_KEY` empty, a browser window will open the first time so you can log in and generate one automatically. The key gets saved locally so you won't need to log in again.
+
+Then:
+1. Run `python ai_bridge_player2.py` in your terminal.
+2. Approve the login in your browser if prompted (first time only).
+3. Launch Warband.
+
 ## Compiling the Mod Files
 
 If you want to tweak the game logic or rebuild the module:
 1. Drop the `module_*.py` files into your Warband Module System folder.
 2. Run your `build_module.bat` to compile the changes into text files for the game engine.
 3. Start the Python bridge, load up the game, and go talk to an NPC.
-
